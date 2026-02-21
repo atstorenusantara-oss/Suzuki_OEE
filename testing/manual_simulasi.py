@@ -25,13 +25,18 @@ def simulate_activity(device, value):
     now = datetime.datetime.now()
     
     # Tentukan tabel master berdasarkan prefix atau pencarian (Default ke fault jika tidak ditemukan di delay)
-    # Kita coba cari di delay master dulu
+    # Coba cari di delay master dulu
     cursor.execute("SELECT 'delay' as type, station_id, plc_id, comment FROM plc_oee_delay_time_master WHERE device = %s", (device,))
     res = cursor.fetchone()
     
     if not res:
-        # Jika tidak ada di delay, cari di fault master
+        # Cari di fault master
         cursor.execute("SELECT 'fault' as type, NULL as station_id, plc_id, comment FROM plc_oee_fault_master WHERE device = %s", (device,))
+        res = cursor.fetchone()
+
+    if not res:
+        # Tambahan: Cari di activities master
+        cursor.execute("SELECT 'word_act' as type, station_id, plc_id, '' as comment FROM plc_oee_activities_master WHERE device = %s", (device,))
         res = cursor.fetchone()
 
     if not res:
@@ -44,8 +49,15 @@ def simulate_activity(device, value):
     plc_id = res['plc_id']
     comment = res['comment'] or ""
     
-    master_table = "plc_oee_delay_time_master" if table_type == 'delay' else "plc_oee_fault_master"
-    activity_table = "plc_oee_delay_activities" if table_type == 'delay' else "plc_oee_fault_activities"
+    if table_type == 'delay':
+        master_table = "plc_oee_delay_time_master"
+        activity_table = "plc_oee_delay_activities"
+    elif table_type == 'fault':
+        master_table = "plc_oee_fault_master"
+        activity_table = "plc_oee_fault_activities"
+    else:
+        master_table = "plc_oee_activities_master"
+        activity_table = "plc_oee_activities"
     
     print(f"\n[PROSES] Device: {device} | Type: {table_type} | Value: {value}")
         
@@ -54,7 +66,13 @@ def simulate_activity(device, value):
         cursor.execute(f"UPDATE {master_table} SET value = %s, updated_at = %s WHERE device = %s", (value, now, device))
         
         # 2. Logika Activity Table
-        if value == 1:
+        if table_type == 'word_act':
+            print(f"INFO: Langsung INSERT ke {activity_table}")
+            sql = f"INSERT INTO {activity_table} (device, station_id, plc_id, value, update_at) VALUES (%s, %s, %s, %s, %s)"
+            cursor.execute(sql, (device, station_id, plc_id, value, now))
+            print(f"SUCCESS: Log activity tersimpan.")
+            
+        elif value == 1:
             print(f"INFO: Menambah baris baru ke {activity_table} (Start Time)")
             if table_type == 'delay':
                 sql = f"INSERT INTO {activity_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, %s, %s)"

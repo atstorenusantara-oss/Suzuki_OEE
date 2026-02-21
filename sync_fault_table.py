@@ -1,6 +1,6 @@
 import pymysql
 
-# Mapping from image: M-trigger (for total_fault.device) to W-device (from plc_oee_activities)
+# Mapping from image: M-trigger (for total_fault.device) to W-device (from plc_oee_activities_master)
 mapping = {
     # Line 1
     "M0": "W80", "M1": "W82", "M2": "W84", "M3": "W86", "M4": "W88",
@@ -27,7 +27,7 @@ try:
     print("Synchronizing total_fault table...")
     
     # Get OEE data for reference
-    cursor.execute("SELECT device, station_id, plc_id, comment FROM plc_oee_activities")
+    cursor.execute("SELECT device, station_id, plc_id, comment FROM plc_oee_activities_master")
     oee_data = {row[0]: {'station_id': row[1], 'plc_id': row[2], 'comment': row[3]} for row in cursor.fetchall()}
 
     # Special case for M49 (Inline & Offline Reminder)

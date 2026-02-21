@@ -22,7 +22,7 @@ class SuzukiPLCGetOptimized:
     def __init__(self):
         self.plc = Type3E()
         self.db_conn = None
-        self.tables = ['plc_oee_delay_time_master', 'plc_oee_activities', 'plc_oee_total_fault', 'ng_plc', 'plc_oee_fault_master']
+        self.tables = ['plc_oee_delay_time_master', 'plc_oee_activities_master', 'plc_oee_total_fault', 'ng_plc', 'plc_oee_fault_master']
         self.device_map = {} # Struktur: {device: {'tables': [table1, ...], 'type': 'BIT'/'WORD', 'count': 1/2}}
 
     def log(self, message, log_type="INFO"):
@@ -127,20 +127,33 @@ class SuzukiPLCGetOptimized:
             cursor = self.db_conn.cursor()
             new_map = {}
             for table in self.tables:
-                cursor.execute(f"SELECT device, value FROM {table}")
-                for device, current_val in cursor.fetchall():
+                # Fetch more columns to support activity logging
+                cols = "device, value"
+                if table == 'plc_oee_activities_master':
+                    cols = "device, value, station_id, plc_id"
+                elif table == 'plc_oee_delay_time_master':
+                    cols = "device, value, station_id, plc_id, comment"
+                elif table == 'plc_oee_fault_master':
+                    cols = "device, value, plc_id, comment"
+                
+                cursor.execute(f"SELECT {cols} FROM {table}")
+                rows = cursor.fetchall()
+                for row in rows:
+                    device = row[0]
                     if not device: continue
-                    prefix_match = re.match(r"^[A-Z]+", device, re.IGNORECASE)
-                    prefix = prefix_match.group(0).upper() if prefix_match else ""
-                    dtype = 'BIT' if prefix in ['B', 'M', 'X', 'Y'] else 'WORD'
-                    count = 2 if table == 'plc_oee_activities' else 1
+                    
+                    current_val = row[1]
+                    info = {
+                        'tables': {table: str(current_val)},
+                        'type': 'BIT' if any(p in device.upper() for p in ['B', 'M', 'X', 'Y']) else 'WORD',
+                        'count': 2 if table == 'plc_oee_activities_master' else 1,
+                        'station_id': row[2] if table in ['plc_oee_activities_master', 'plc_oee_delay_time_master'] else None,
+                        'plc_id': row[3] if table in ['plc_oee_activities_master', 'plc_oee_delay_time_master'] else (row[2] if table == 'plc_oee_fault_master' else None),
+                        'comment': row[4] if table == 'plc_oee_delay_time_master' else (row[3] if table == 'plc_oee_fault_master' else None)
+                    }
                     
                     if device not in new_map:
-                        new_map[device] = {
-                            'tables': {table: str(current_val)},
-                            'type': dtype, 
-                            'count': count
-                        }
+                        new_map[device] = info
                     else:
                         new_map[device]['tables'][table] = str(current_val)
             self.device_map = new_map
@@ -156,8 +169,37 @@ class SuzukiPLCGetOptimized:
         try:
             cursor = self.db_conn.cursor()
             for table, device, value in update_data:
+                # 1. Update Master Table (Current Status)
                 sql = f"UPDATE {table} SET value = %s, updated_at = NOW() WHERE device = %s"
                 cursor.execute(sql, (str(value), device))
+                
+                # 2. Log Activity (Logic from manual_simulasi.py)
+                info = self.device_map.get(device)
+                if info:
+                    if table == 'plc_oee_activities_master':
+                        # Hanya INSERT untuk Word Activities
+                        log_sql = "INSERT INTO plc_oee_activities (device, station_id, plc_id, value, update_at) VALUES (%s, %s, %s, %s, NOW())"
+                        cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], str(value)))
+                    
+                    elif table in ['plc_oee_delay_time_master', 'plc_oee_fault_master']:
+                        # Start/End logic for Bits
+                        act_table = 'plc_oee_delay_activities' if table == 'plc_oee_delay_time_master' else 'plc_oee_fault_activities'
+                        end_col = 'end_time' if table == 'plc_oee_delay_time_master' else 'endtime'
+                        
+                        if str(value) == '1':
+                            # Insert Start
+                            if table == 'plc_oee_delay_time_master':
+                                log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
+                                cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
+                            else:
+                                log_sql = f"INSERT INTO {act_table} (device, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, NOW(), NOW())"
+                                cursor.execute(log_sql, (device, info['plc_id'], 1, info['comment']))
+                        
+                        elif str(value) == '0':
+                            # Update End Time for last open record
+                            log_sql = f"UPDATE {act_table} SET {end_col} = NOW(), update_at = NOW() WHERE device = %s AND {end_col} IS NULL ORDER BY start_time DESC LIMIT 1"
+                            cursor.execute(log_sql, (device,))
+
                 if device in self.device_map and table in self.device_map[device]['tables']:
                     self.device_map[device]['tables'][table] = str(value)
         except Exception as e:

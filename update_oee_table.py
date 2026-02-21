@@ -57,13 +57,13 @@ try:
     conn = pymysql.connect(host='localhost', user='root', password='', database='plc_db', autocommit=True)
     cursor = conn.cursor()
     
-    print("Updating plc_oee_activities table...")
+    print("Updating plc_oee_activities_master table...")
     update_count = 0
     for process_type, line_station, device in data:
         # Check if device exists
-        cursor.execute("SELECT device FROM plc_oee_activities WHERE device = %s", (device,))
+        cursor.execute("SELECT device FROM plc_oee_activities_master WHERE device = %s", (device,))
         if cursor.fetchone():
-            sql = "UPDATE plc_oee_activities SET comment = %s, process_type = %s WHERE device = %s"
+            sql = "UPDATE plc_oee_activities_master SET comment = %s, process_type = %s WHERE device = %s"
             cursor.execute(sql, (line_station, process_type, device))
             update_count += 1
         else:
