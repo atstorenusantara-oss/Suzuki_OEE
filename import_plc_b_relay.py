@@ -1,10 +1,19 @@
 import csv
 import pymysql
 
+from Suzuki_PLC_get import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB
+
 csv_file = 'SUZUKI OEE - LIST TABLE  - Sheet4.csv'
 
 try:
-    conn = pymysql.connect(host='localhost', user='root', password='', database='plc_db', autocommit=True)
+    conn = pymysql.connect(
+        host=MYSQL_HOST, 
+        port=MYSQL_PORT,
+        user=MYSQL_USER, 
+        password=MYSQL_PASSWORD, 
+        database=MYSQL_DB, 
+        autocommit=True
+    )
     cursor = conn.cursor()
     
     print(f"Reading {csv_file} and updating plc_b_relay...")

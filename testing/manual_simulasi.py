@@ -5,9 +5,10 @@ import re
 
 # Configuration
 MYSQL_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
+    'host': '31.97.105.85',
+    'port': 5307,
+    'user': 'plc_user',
+    'password': '5y1vf1qqay9764g',
     'database': 'plc_db',
     'autocommit': True
 }

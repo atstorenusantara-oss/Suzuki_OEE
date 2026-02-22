@@ -20,8 +20,17 @@ mapping = {
     "M52": None
 }
 
+from Suzuki_PLC_get import MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB
+
 try:
-    conn = pymysql.connect(host='localhost', user='root', password='', database='plc_db', autocommit=True)
+    conn = pymysql.connect(
+        host=MYSQL_HOST, 
+        port=MYSQL_PORT,
+        user=MYSQL_USER, 
+        password=MYSQL_PASSWORD, 
+        database=MYSQL_DB, 
+        autocommit=True
+    )
     cursor = conn.cursor()
 
     print("Synchronizing total_fault table...")

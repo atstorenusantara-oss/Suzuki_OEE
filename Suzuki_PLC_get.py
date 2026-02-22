@@ -10,9 +10,10 @@ PLC_IP = "172.16.134.39"
 PLC_PORT = 9000
 
 # --- CONFIGURATION MYSQL ---
-MYSQL_HOST = "localhost"
-MYSQL_USER = "root"
-MYSQL_PASSWORD = ""
+MYSQL_HOST = "31.97.105.85"
+MYSQL_PORT = 5307
+MYSQL_USER = "plc_user"
+MYSQL_PASSWORD = "5y1vf1qqay9764g"
 MYSQL_DB = "plc_db"
 
 # --- UPDATE INTERVAL ---
@@ -34,7 +35,14 @@ class SuzukiPLCGetOptimized:
     def connect_db(self):
         try:
             if self.db_conn is None or not self.db_conn.open:
-                self.db_conn = pymysql.connect(host=MYSQL_HOST, user=MYSQL_USER, password=MYSQL_PASSWORD, database=MYSQL_DB, autocommit=True)
+                self.db_conn = pymysql.connect(
+                    host=MYSQL_HOST, 
+                    port=MYSQL_PORT,
+                    user=MYSQL_USER, 
+                    password=MYSQL_PASSWORD, 
+                    database=MYSQL_DB, 
+                    autocommit=True
+                )
                 self.log("DATABASE: Terhubung (OK)")
             return True
         except Exception as e:
