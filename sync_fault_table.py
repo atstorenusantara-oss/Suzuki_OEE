@@ -33,7 +33,7 @@ try:
     )
     cursor = conn.cursor()
 
-    print("Synchronizing total_fault table...")
+    print("Synchronizing plc_oee_total_fault_master table...")
     
     # Get OEE data for reference
     cursor.execute("SELECT device, station_id, plc_id, comment FROM plc_oee_activities_master")
@@ -48,22 +48,22 @@ try:
     for m_addr, w_addr in mapping.items():
         if w_addr and w_addr in oee_data:
             info = oee_data[w_addr]
-            # Check if M trigger exists in total_fault
-            cursor.execute("SELECT device FROM total_fault WHERE device = %s", (m_addr,))
+            # Check if M trigger exists in plc_oee_total_fault_master
+            cursor.execute("SELECT device FROM plc_oee_total_fault_master WHERE device = %s", (m_addr,))
             exists = cursor.fetchone()
             
             if exists:
-                sql = "UPDATE total_fault SET station_id = %s, plc_id = %s, line_name = %s, comment = %s WHERE device = %s"
-                cursor.execute(sql, (info['station_id'], info['plc_id'], info['comment'], info['comment'], m_addr))
+                sql = "UPDATE plc_oee_total_fault_master SET station_id = %s, plc_id = %s, comment = %s WHERE device = %s"
+                cursor.execute(sql, (info['station_id'], info['plc_id'], info['comment'], m_addr))
             else:
-                sql = "INSERT INTO total_fault (device, station_id, plc_id, line_name, comment, value) VALUES (%s, %s, %s, %s, %s, '0')"
-                cursor.execute(sql, (m_addr, info['station_id'], info['plc_id'], info['comment'], info['comment']))
+                sql = "INSERT INTO plc_oee_total_fault_master (device, station_id, plc_id, comment, value) VALUES (%s, %s, %s, %s, '0')"
+                cursor.execute(sql, (m_addr, info['station_id'], info['plc_id'], info['comment']))
             count += 1
         elif m_addr in ["M50", "M51", "M52"]:
             # Special markers without specific sequence read in the image
             pass
 
-    print(f"Successfully synchronized {count} records in total_fault.")
+    print(f"Successfully synchronized {count} records in plc_oee_total_fault_master.")
     conn.close()
 except Exception as e:
     print(f"Error: {e}")

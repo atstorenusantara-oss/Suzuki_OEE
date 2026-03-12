@@ -10,11 +10,19 @@ PLC_IP = "172.16.134.39"
 PLC_PORT = 9000
 
 # --- CONFIGURATION MYSQL ---
-MYSQL_HOST = "31.97.105.85"
-MYSQL_PORT = 5307
-MYSQL_USER = "plc_user"
-MYSQL_PASSWORD = "5y1vf1qqay9764g"
+#MYSQL_HOST = "31.97.105.85"
+#MYSQL_PORT = 5307
+#MYSQL_USER = "plc_user"
+#MYSQL_PASSWORD = "5y1vf1qqay9764g"
+#MYSQL_DB = "plc_db"
+
+
+MYSQL_HOST = "localhost"
+MYSQL_PORT = 3306
+MYSQL_USER = "root"
+MYSQL_PASSWORD = ""
 MYSQL_DB = "plc_db"
+
 
 # --- UPDATE INTERVAL ---
 INTERVAL = 1  # detik
@@ -23,7 +31,7 @@ class SuzukiPLCGetOptimized:
     def __init__(self):
         self.plc = Type3E()
         self.db_conn = None
-        self.tables = ['plc_oee_delay_time_master', 'plc_oee_activities_master', 'plc_oee_total_fault', 'ng_plc', 'plc_oee_fault_master']
+        self.tables = ['plc_oee_delay_time_master', 'plc_oee_activities_master', 'plc_oee_total_fault_master', 'plc_oee_ng_plc_master', 'plc_oee_fault_master']
         self.device_map = {} # Struktur: {device: {'tables': [table1, ...], 'type': 'BIT'/'WORD', 'count': 1/2}}
 
     def log(self, message, log_type="INFO"):
@@ -43,7 +51,9 @@ class SuzukiPLCGetOptimized:
                     database=MYSQL_DB, 
                     autocommit=True
                 )
-                self.log("DATABASE: Terhubung (OK)")
+                with self.db_conn.cursor() as cursor:
+                    cursor.execute("SET time_zone = '+07:00'")
+                self.log("DATABASE: Terhubung (OK, TZ +07:00)")
             return True
         except Exception as e:
             self.log(f"DATABASE: Gagal. ({e})", "ERROR")
@@ -143,6 +153,8 @@ class SuzukiPLCGetOptimized:
                     cols = "device, value, station_id, plc_id, comment"
                 elif table == 'plc_oee_fault_master':
                     cols = "device, value, plc_id, comment"
+                elif table == 'plc_oee_total_fault_master':
+                    cols = "device, value, station_id, plc_id, comment"
                 
                 cursor.execute(f"SELECT {cols} FROM {table}")
                 rows = cursor.fetchall()
@@ -155,9 +167,9 @@ class SuzukiPLCGetOptimized:
                         'tables': {table: str(current_val)},
                         'type': 'BIT' if any(p in device.upper() for p in ['B', 'M', 'X', 'Y']) else 'WORD',
                         'count': 2 if table == 'plc_oee_activities_master' else 1,
-                        'station_id': row[2] if table in ['plc_oee_activities_master', 'plc_oee_delay_time_master'] else None,
-                        'plc_id': row[3] if table in ['plc_oee_activities_master', 'plc_oee_delay_time_master'] else (row[2] if table == 'plc_oee_fault_master' else None),
-                        'comment': row[4] if table == 'plc_oee_delay_time_master' else (row[3] if table == 'plc_oee_fault_master' else None)
+                        'station_id': row[2] if table in ['plc_oee_activities_master', 'plc_oee_delay_time_master', 'plc_oee_total_fault_master'] else None,
+                        'plc_id': row[3] if table in ['plc_oee_activities_master', 'plc_oee_delay_time_master', 'plc_oee_total_fault_master'] else (row[2] if table == 'plc_oee_fault_master' else None),
+                        'comment': row[4] if table in ['plc_oee_delay_time_master', 'plc_oee_total_fault_master'] else (row[3] if table == 'plc_oee_fault_master' else None)
                     }
                     
                     if device not in new_map:
@@ -189,17 +201,24 @@ class SuzukiPLCGetOptimized:
                         log_sql = "INSERT INTO plc_oee_activities (device, station_id, plc_id, value, update_at) VALUES (%s, %s, %s, %s, NOW())"
                         cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], str(value)))
                     
-                    elif table in ['plc_oee_delay_time_master', 'plc_oee_fault_master']:
+                    elif table in ['plc_oee_delay_time_master', 'plc_oee_fault_master', 'plc_oee_total_fault_master']:
                         # Start/End logic for Bits
-                        act_table = 'plc_oee_delay_activities' if table == 'plc_oee_delay_time_master' else 'plc_oee_fault_activities'
-                        end_col = 'end_time' if table == 'plc_oee_delay_time_master' else 'endtime'
+                        if table == 'plc_oee_delay_time_master':
+                            act_table, end_col = 'plc_oee_delay_activities', 'end_time'
+                        elif table == 'plc_oee_fault_master':
+                            act_table, end_col = 'plc_oee_fault_activities', 'endtime'
+                        else: # total_fault_master
+                            act_table, end_col = 'plc_oee_total_fault_activity', 'end_time'
                         
                         if str(value) == '1':
                             # Insert Start
                             if table == 'plc_oee_delay_time_master':
                                 log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
                                 cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
-                            else:
+                            elif table == 'plc_oee_total_fault_master':
+                                log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
+                                cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
+                            else: # fault_master
                                 log_sql = f"INSERT INTO {act_table} (device, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, NOW(), NOW())"
                                 cursor.execute(log_sql, (device, info['plc_id'], 1, info['comment']))
                         

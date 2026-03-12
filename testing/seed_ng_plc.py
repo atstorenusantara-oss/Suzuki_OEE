@@ -18,8 +18,8 @@ def seed_ng_plc():
         cursor = conn.cursor()
 
         # Bersihkan tabel sebelum memasukkan data baru
-        cursor.execute("TRUNCATE TABLE ng_plc")
-        print("Tabel ng_plc telah dibersihkan.")
+        cursor.execute("TRUNCATE TABLE plc_oee_ng_plc_master")
+        print("Tabel plc_oee_ng_plc_master telah dibersihkan.")
 
         # Data Station 3: W90 - W9F
         # Data Station 12: W2D0 - W2DF
@@ -55,7 +55,7 @@ def seed_ng_plc():
 
 
         sql = """
-            INSERT INTO ng_plc (device, station_id, plc_id, value, comment)
+            INSERT INTO plc_oee_ng_plc_master (device, station_id, plc_id, value, comment)
             VALUES (%s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE 
                 station_id = VALUES(station_id),

@@ -16,7 +16,7 @@ def parse_device(device):
 try:
     conn = pymysql.connect(host='localhost', user='root', password='', database='plc_db')
     cursor = conn.cursor()
-    tables = ['plc_oee_delay_time_master', 'plc_oee_activities_master', 'plc_oee_total_fault', 'ng_plc', 'plc_oee_fault_master']
+    tables = ['plc_oee_delay_time_master', 'plc_oee_activities_master', 'plc_oee_total_fault_master', 'plc_oee_ng_plc_master', 'plc_oee_fault_master']
     for t in tables:
         cursor.execute(f"SELECT device FROM {t}")
         for row in cursor.fetchall():
