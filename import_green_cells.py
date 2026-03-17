@@ -59,7 +59,7 @@ def handle_got_master_green():
             # 2. Insert green rows
             print(f"Importing {len(green_data)} green records...")
             insert_sql = """
-            INSERT INTO plc_oee_got_master (device, value, komen)
+            INSERT INTO plc_oee_got_master (device, value, comment)
             VALUES (%s, %s, %s)
             """
             cursor.executemany(insert_sql, green_data)

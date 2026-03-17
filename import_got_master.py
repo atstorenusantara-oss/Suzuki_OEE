@@ -29,16 +29,16 @@ def create_and_import():
     
     # Mapping based on observation:
     # DEVICE -> device
-    # COMMENT -> komen
+    # COMMENT -> comment
     # value -> 0 (default)
     
     data_to_import = []
     for _, row in df.iterrows():
         device = str(row['DEVICE']).strip() if pd.notna(row['DEVICE']) else None
-        komen = str(row['COMMENT']).strip() if pd.notna(row['COMMENT']) else ""
+        comment = str(row['COMMENT']).strip() if pd.notna(row['COMMENT']) else ""
         
         if device and device != "DEVICE": # avoid header if repeated
-            data_to_import.append((device, '0', komen))
+            data_to_import.append((device, '0', comment))
 
     print(f"Connecting to database {MYSQL_DB}...")
     conn = connect_db()
@@ -51,7 +51,7 @@ def create_and_import():
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 device VARCHAR(50) NOT NULL UNIQUE,
                 value VARCHAR(50) DEFAULT '0',
-                komen TEXT,
+                comment TEXT,
                 update_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) ENGINE=InnoDB;
             """
@@ -61,9 +61,9 @@ def create_and_import():
             # We'll use INSERT ... ON DUPLICATE KEY UPDATE to be safe
             print(f"Importing {len(data_to_import)} records...")
             insert_sql = """
-            INSERT INTO plc_oee_got_master (device, value, komen)
+            INSERT INTO plc_oee_got_master (device, value, comment)
             VALUES (%s, %s, %s)
-            ON DUPLICATE KEY UPDATE komen = VALUES(komen), update_at = NOW();
+            ON DUPLICATE KEY UPDATE comment = VALUES(comment), update_at = NOW();
             """
             cursor.executemany(insert_sql, data_to_import)
             

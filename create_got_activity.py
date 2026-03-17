@@ -28,7 +28,7 @@ def create_activity_table():
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 device VARCHAR(50) NOT NULL,
                 value VARCHAR(50) DEFAULT '0',
-                komen TEXT,
+                comment TEXT,
                 start_time DATETIME DEFAULT NULL,
                 end_time DATETIME DEFAULT NULL,
                 update_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
