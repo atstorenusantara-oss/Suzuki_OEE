@@ -7,7 +7,7 @@ try:
     
     # Membaca data dari alamat B0 (sama dengan B000 dalam format Hex)
     # Membaca 5 unit word (masing-masing 16 bit)
-    data = plc.batchread_wordunits("D314", 2)
+    data = plc.batchread_wordunits("D1103",1)
     print(f"Data terbaca (Raw): {data}")
     
     # Konversi data word ke ASCII

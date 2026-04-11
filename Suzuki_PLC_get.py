@@ -10,18 +10,19 @@ PLC_IP = "172.16.134.39"
 PLC_PORT = 9000
 
 # --- CONFIGURATION MYSQL ---
-#MYSQL_HOST = "localhost"
-#MYSQL_PORT = 3306
-#MYSQL_USER = "root"
-#MYSQL_PASSWORD = ""
-#MYSQL_DB = "plc_db"
+MYSQL_HOST = "localhost"
+MYSQL_PORT = 3306
+MYSQL_USER = "root"
+MYSQL_PASSWORD = ""
+MYSQL_DB = "plc_db"
 
 # Remote Backup (Optional)
-MYSQL_HOST = "172.16.121.30"
-MYSQL_PORT = 5307
-MYSQL_USER = "plc_user"
-MYSQL_PASSWORD = "5y1vf1qqay9764g"
-MYSQL_DB = "plc_db"
+# MYSQL_HOST = "172.16.121.30" # IP Server Suzuki
+# MYSQL_HOST = "31.97.105.85" # IP Server Suzuki
+# MYSQL_PORT = 5307
+# MYSQL_USER = "plc_user"
+# MYSQL_PASSWORD = "5y1vf1qqay9764g"
+# MYSQL_DB = "plc_db"
 
 
 # --- UPDATE INTERVAL ---
@@ -40,11 +41,11 @@ class SuzukiPLCGetOptimized:
         self.plc = Type3E()
         self.db_conn = None
         self.tables = [
-            'plc_oee_delay_time_master', 
-            'plc_oee_activities_master', 
-            'plc_oee_total_fault_master', 
-            'plc_oee_ng_plc_master', 
-            'plc_oee_fault_master', 
+            # 'plc_oee_delay_time_master', 
+            # 'plc_oee_activities_master', 
+            # 'plc_oee_total_fault_master', 
+            # 'plc_oee_ng_plc_master', 
+            # 'plc_oee_fault_master', 
             'plc_oee_seat_result_detail',
             'plc_oee_seat_text_input',
             'plc_oee_seat_ng_ok_master'
@@ -151,15 +152,15 @@ class SuzukiPLCGetOptimized:
             for table in self.tables:
                 # Ambil 5 kolom standar (device, value, station_id, plc_id, comment)
                 # Gunakan NULL sebagai placeholder jika kolom asli tidak ada di tabel tertentu
-                if table == 'plc_oee_activities_master':
-                    cols = "device, value, station_id, plc_id, NULL as comment"
-                elif table == 'plc_oee_delay_time_master':
-                    cols = "device, value, station_id, plc_id, comment"
-                elif table == 'plc_oee_fault_master':
-                    cols = "device, value, NULL as station_id, plc_id, comment"
-                elif table == 'plc_oee_total_fault_master':
-                    cols = "device, value, station_id, plc_id, comment"
-                elif table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master']:
+                # if table == 'plc_oee_activities_master':
+                #     cols = "device, value, station_id, plc_id, NULL as comment"
+                # elif table == 'plc_oee_delay_time_master':
+                #     cols = "device, value, station_id, plc_id, comment"
+                # elif table == 'plc_oee_fault_master':
+                #     cols = "device, value, NULL as station_id, plc_id, comment"
+                # elif table == 'plc_oee_total_fault_master':
+                #     cols = "device, value, station_id, plc_id, comment"
+                if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master']:
                     cols = "device, value, station_id, NULL as plc_id, comment"
                 else: 
                     cols = "device, value, NULL as station_id, NULL as plc_id, NULL as comment"
@@ -182,7 +183,7 @@ class SuzukiPLCGetOptimized:
                     is_ascii = any(x in comment_text for x in ['MODEL', 'DEST', 'GRADE', 'TEXT', 'SEQ'])
                     
                     if table == 'plc_oee_seat_text_input':
-                        count = 20
+                        count = 10
                     elif 'MODEL' in comment_text:
                         count = 3
                     elif table == 'plc_oee_activities_master' or is_ascii:
@@ -230,11 +231,11 @@ class SuzukiPLCGetOptimized:
                 # 2. Log Activity & Result Updates
                 info = self.device_map.get(device)
                 if info:
-                    if table == 'plc_oee_activities_master':
-                        log_sql = "INSERT INTO plc_oee_activities (device, station_id, plc_id, value, update_at) VALUES (%s, %s, %s, %s, NOW())"
-                        cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], str(value)))
+                    # if table == 'plc_oee_activities_master':
+                    #     log_sql = "INSERT INTO plc_oee_activities (device, station_id, plc_id, value, update_at) VALUES (%s, %s, %s, %s, NOW())"
+                    #     cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], str(value)))
                     
-                    elif table == 'plc_oee_seat_text_input':
+                    if table == 'plc_oee_seat_text_input':
                         # NEW ACTIVITY LOG: Log separate history for Text Input (20 words)
                         log_sql = "INSERT INTO plc_oee_seat_text_input_activity (device, station_id, value, update_at) VALUES (%s, %s, %s, NOW())"
                         cursor.execute(log_sql, (device, info['station_id'], str(value)))
@@ -275,31 +276,32 @@ class SuzukiPLCGetOptimized:
                                     
                                     self.log(f"SYNC LOG: {col_to_update} at QC{stn_id} (Val: {value})")
                     
-                    elif table in ['plc_oee_delay_time_master', 'plc_oee_fault_master', 'plc_oee_total_fault_master']:
-                        # Start/End logic for Bits
-                        if table == 'plc_oee_delay_time_master':
-                            act_table, end_col = 'plc_oee_delay_activities', 'end_time'
-                        elif table == 'plc_oee_fault_master':
-                            act_table, end_col = 'plc_oee_fault_activities', 'endtime'
-                        else: # total_fault_master
-                            act_table, end_col = 'plc_oee_total_fault_activity', 'end_time'
-                        
-                        if str(value) == '1':
-                            # Insert Start
-                            if table == 'plc_oee_delay_time_master':
-                                log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
-                                cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
-                            elif table == 'plc_oee_total_fault_master':
-                                log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
-                                cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
-                            else: # fault_master
-                                log_sql = f"INSERT INTO {act_table} (device, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, NOW(), NOW())"
-                                cursor.execute(log_sql, (device, info['plc_id'], 1, info['comment']))
-                        
-                        elif str(value) == '0':
-                            # Update End Time for last open record
-                            log_sql = f"UPDATE {act_table} SET {end_col} = NOW(), update_at = NOW() WHERE device = %s AND {end_col} IS NULL ORDER BY start_time DESC LIMIT 1"
-                            cursor.execute(log_sql, (device,))
+                    # elif table in ['plc_oee_delay_time_master', 'plc_oee_fault_master', 'plc_oee_total_fault_master']:
+                    #     # Start/End logic for Bits
+                    #     if table == 'plc_oee_delay_time_master':
+                    #         act_table, end_col = 'plc_oee_delay_activities', 'end_time'
+                    #     elif table == 'plc_oee_fault_master':
+                    #         act_table, end_col = 'plc_oee_fault_activities', 'endtime'
+                    #     else: # total_fault_master
+                    #         act_table, end_col = 'plc_oee_total_fault_activity', 'end_time'
+                    #     
+                    #     if str(value) == '1':
+                    #         # Insert Start
+                    #         if table == 'plc_oee_delay_time_master':
+                    #             log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
+                    #             cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
+                    #         elif table == 'plc_oee_total_fault_master':
+                    #             log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
+                    #             cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
+                    #         else: # fault_master
+                    #             log_sql = f"INSERT INTO {act_table} (device, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, NOW(), NOW())"
+                    #             cursor.execute(log_sql, (device, info['plc_id'], 1, info['comment']))
+                    #     
+                    #     elif str(value) == '0':
+                    #         # Update End Time for last open record
+                    #         log_sql = f"UPDATE {act_table} SET {end_col} = NOW(), update_at = NOW() WHERE device = %s AND {end_col} IS NULL ORDER BY start_time DESC LIMIT 1"
+                    #         cursor.execute(log_sql, (device,))
+                    pass
 
                 if device in self.device_map and table in self.device_map[device]['tables']:
                     self.device_map[device]['tables'][table] = str(value)
@@ -334,26 +336,58 @@ class SuzukiPLCGetOptimized:
                     db_updates = []
                     for dev, val in all_results.items():
                         meta = self.device_map[dev]
-                        if meta['count'] > 1: # Block Word / ASCII
+                        
+                        # --- OPTIMIZED DECODER: String, 32-bit Int, and OK/NG Mapping ---
+                        if meta['type'] == 'WORD':
                             try:
-                                # Konversi list word ke string ASCII
+                                # 1. Try ASCII Decoding (Works for both 1-word "OK" or multi-word "MODEL")
+                                # val is a list of words [word0, word1, ...]
                                 ascii_str = "".join([chr(w & 0xFF) + chr((w >> 8) & 0xFF) for w in val])
                                 ascii_cleaned = ascii_str.strip('\x00').strip()
                                 
-                                # Jika ini adalah field MODEL/DEST/GRADE (2 words), Suzuki biasanya parse ke integer string
-                                # Jika TEXT INPUT (20 words), ambil sbagai string biasa
-                                if meta['count'] == 2:
-                                    try: val_to_save = str(int(ascii_cleaned))
-                                    except: val_to_save = ascii_cleaned
+                                # 2. Determine raw integer value for numeric fallback
+                                raw_val = (val[0] + (val[1] << 16)) if meta['count'] >= 2 else val[0]
+                                
+                                # 3. Context-aware decision: String or Number?
+                                is_result_table = any(t in meta['tables'] for t in [
+                                    'plc_oee_seat_ng_ok_master', 
+                                    'plc_oee_seat_result_detail', 
+                                    'plc_oee_activities_master'
+                                ])
+                                
+                                # If it's a known result table, check for OK (1) / NG (2) mapping first
+                                if is_result_table:
+                                    if raw_val == 1: 
+                                        val_to_save = "OK"
+                                    elif raw_val == 2: 
+                                        val_to_save = "NG"
+                                    elif ascii_cleaned.isprintable() and len(ascii_cleaned) > 0 and not ascii_cleaned.isdigit():
+                                        # Use ASCII if it's printable text (like "OK" string or "FAIL")
+                                        val_to_save = ascii_cleaned
+                                    else:
+                                        # Use standard ASCII cleaning if it was numeric string (like "43") or just number
+                                        val_to_save = ascii_cleaned if (ascii_cleaned.isprintable() and len(ascii_cleaned) > 0) else str(raw_val)
                                 else:
-                                    val_to_save = ascii_cleaned
-                            except: 
+                                    # For other tables (Activities, MODEL, etc.)
+                                    # Logic: If it's printable and not a simple single-digit number, treat as ASCII
+                                    if ascii_cleaned.isprintable() and len(ascii_cleaned) > 1:
+                                        # Handle special case: Suzuki biasanya menginginkan string ID untuk 2-word MODEL/DEST
+                                        if meta['count'] == 2:
+                                            try: val_to_save = str(int(ascii_cleaned))
+                                            except: val_to_save = ascii_cleaned
+                                        else:
+                                            val_to_save = ascii_cleaned
+                                    else:
+                                        # Fallback to number
+                                        val_to_save = str(raw_val)
+                                        
+                            except Exception as e:
                                 val_to_save = "".join([f"{v:04X}" for v in val])
-                        elif isinstance(val, list):
-                            val_to_save = str(val[0])
-                        else:
+                        
+                        else: # BIT Type
                             val_to_save = str(val)
 
+                        # --- SYNC TO DATABASE ---
                         for table, last_val in meta['tables'].items():
                             if val_to_save != last_val:
                                 db_updates.append((table, dev, val_to_save))
