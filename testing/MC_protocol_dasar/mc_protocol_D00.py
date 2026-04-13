@@ -4,10 +4,10 @@ plc = Type3E()
 try:
     # Menghubungkan ke PLC
     plc.connect("172.16.134.39", 9000)
-    
+
     # Membaca data dari alamat B0 (sama dengan B000 dalam format Hex)
     # Membaca 5 unit word (masing-masing 16 bit)
-    data = plc.batchread_wordunits("D1103",1)
+    data = plc.batchread_wordunits("D1250",10)
     print(f"Data terbaca (Raw): {data}")
     
     # Konversi data word ke ASCII

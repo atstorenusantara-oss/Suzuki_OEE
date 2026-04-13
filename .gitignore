@@ -9,3 +9,6 @@ ENV/
 .vscode/
 .idea/
 *.log
+build/
+dist/
+
