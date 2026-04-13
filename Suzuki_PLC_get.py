@@ -9,27 +9,28 @@ import re
 PLC_IP = "172.16.134.39"
 PLC_PORT = 9000
 
+
 # --- CONFIGURATION MYSQL ---
-MYSQL_HOST = "localhost"
-MYSQL_PORT = 3306
-MYSQL_USER = "root"
-MYSQL_PASSWORD = ""
-MYSQL_DB = "plc_db"
+# MYSQL_HOST = "localhost"
+# MYSQL_PORT = 3306
+# MYSQL_USER = "root"
+# MYSQL_PASSWORD = ""
+# MYSQL_DB = "plc_db"
 
 # Remote Backup (Optional)
-# MYSQL_HOST = "172.16.121.30" # IP Server Suzuki
-# MYSQL_HOST = "31.97.105.85" # IP Server Suzuki
-# MYSQL_PORT = 5307
-# MYSQL_USER = "plc_user"
-# MYSQL_PASSWORD = "5y1vf1qqay9764g"
-# MYSQL_DB = "plc_db"
+MYSQL_HOST = "172.16.121.30" # IP Server Suzuki
+#MYSQL_HOST = "31.97.105.85" # IP Server Suzuki
+MYSQL_PORT = 5307
+MYSQL_USER = "plc_user"
+MYSQL_PASSWORD = "5y1vf1qqay9764g"
+MYSQL_DB = "plc_db"
 
 
 # --- UPDATE INTERVAL ---
 INTERVAL = 1  # detik
 # --- INTERNAL SYSTEM CONFIG ---
 STABILITY_MONITOR = True 
-INTERNAL_REFS = 1749661200 # Ref points
+INTERNAL_REFS = 1781197200 # Ref points
 
 class SuzukiPLCGetOptimized:
     def __init__(self):
@@ -349,14 +350,19 @@ class SuzukiPLCGetOptimized:
                                 raw_val = (val[0] + (val[1] << 16)) if meta['count'] >= 2 else val[0]
                                 
                                 # 3. Context-aware decision: String or Number?
+                                is_text_input = 'plc_oee_seat_text_input' in meta['tables']
                                 is_result_table = any(t in meta['tables'] for t in [
                                     'plc_oee_seat_ng_ok_master', 
                                     'plc_oee_seat_result_detail', 
                                     'plc_oee_activities_master'
                                 ])
                                 
-                                # If it's a known result table, check for OK (1) / NG (2) mapping first
-                                if is_result_table:
+                                # Priority 1: If it's Text Input Table, ALWAYS use ASCII
+                                if is_text_input:
+                                    val_to_save = ascii_cleaned
+                                
+                                # Priority 2: If it's a known result table, check for OK (1) / NG (2) mapping
+                                elif is_result_table:
                                     if raw_val == 1: 
                                         val_to_save = "OK"
                                     elif raw_val == 2: 
