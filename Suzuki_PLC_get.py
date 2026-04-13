@@ -7,7 +7,7 @@ import re
 
 # --- CONFIGURATION PLC ---
 PLC_IP = "172.16.134.39"
-PLC_PORT = 9000
+PLC_PORT = 9001
 
 
 # --- CONFIGURATION MYSQL ---
