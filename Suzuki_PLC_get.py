@@ -7,10 +7,10 @@ import re
 
 # --- CONFIGURATION PLC ---
 PLC_IP = "172.16.134.39"
-PLC_PORT = 9001
+PLC_PORT = 9000
 
 
-# --- CONFIGURATION MYSQL ---
+#--- CONFIGURATION MYSQL ---
 # MYSQL_HOST = "localhost"
 # MYSQL_PORT = 3306
 # MYSQL_USER = "root"
@@ -42,11 +42,11 @@ class SuzukiPLCGetOptimized:
         self.plc = Type3E()
         self.db_conn = None
         self.tables = [
-            # 'plc_oee_delay_time_master', 
-            # 'plc_oee_activities_master', 
-            # 'plc_oee_total_fault_master', 
-            # 'plc_oee_ng_plc_master', 
-            # 'plc_oee_fault_master', 
+            'plc_oee_delay_time_master', 
+            'plc_oee_activities_master', 
+            'plc_oee_total_fault_master', 
+            'plc_oee_ng_plc_master', 
+            'plc_oee_fault_master', 
             'plc_oee_seat_result_detail',
             'plc_oee_seat_text_input',
             'plc_oee_seat_ng_ok_master'
@@ -153,16 +153,16 @@ class SuzukiPLCGetOptimized:
             for table in self.tables:
                 # Ambil 5 kolom standar (device, value, station_id, plc_id, comment)
                 # Gunakan NULL sebagai placeholder jika kolom asli tidak ada di tabel tertentu
-                # if table == 'plc_oee_activities_master':
-                #     cols = "device, value, station_id, plc_id, NULL as comment"
-                # elif table == 'plc_oee_delay_time_master':
-                #     cols = "device, value, station_id, plc_id, comment"
-                # elif table == 'plc_oee_fault_master':
-                #     cols = "device, value, NULL as station_id, plc_id, comment"
-                # elif table == 'plc_oee_total_fault_master':
-                #     cols = "device, value, station_id, plc_id, comment"
                 if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master']:
                     cols = "device, value, station_id, NULL as plc_id, comment"
+                elif table == 'plc_oee_activities_master':
+                    cols = "device, value, station_id, plc_id, NULL as comment"
+                elif table == 'plc_oee_delay_time_master':
+                    cols = "device, value, station_id, plc_id, comment"
+                elif table == 'plc_oee_fault_master':
+                    cols = "device, value, NULL as station_id, plc_id, comment"
+                elif table == 'plc_oee_total_fault_master':
+                    cols = "device, value, station_id, plc_id, comment"
                 else: 
                     cols = "device, value, NULL as station_id, NULL as plc_id, NULL as comment"
                 
@@ -226,17 +226,22 @@ class SuzukiPLCGetOptimized:
             cursor = self.db_conn.cursor()
             for table, device, value in update_data:
                 # 1. Update Master Table
-                ts_col = "update_at" if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master'] else "updated_at"
+                # Determine Timestamp Column Name
+                if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master']:
+                    ts_col = "update_at"
+                else:
+                    ts_col = "updated_at"
+                
                 sql = f"UPDATE {table} SET value = %s, {ts_col} = NOW() WHERE device = %s"
                 cursor.execute(sql, (str(value), device))
                 # 2. Log Activity & Result Updates
                 info = self.device_map.get(device)
                 if info:
-                    # if table == 'plc_oee_activities_master':
-                    #     log_sql = "INSERT INTO plc_oee_activities (device, station_id, plc_id, value, update_at) VALUES (%s, %s, %s, %s, NOW())"
-                    #     cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], str(value)))
+                    if table == 'plc_oee_activities_master':
+                        log_sql = "INSERT INTO plc_oee_activities (device, station_id, plc_id, value, update_at) VALUES (%s, %s, %s, %s, NOW())"
+                        cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], str(value)))
                     
-                    if table == 'plc_oee_seat_text_input':
+                    elif table == 'plc_oee_seat_text_input':
                         # NEW ACTIVITY LOG: Log separate history for Text Input (20 words)
                         log_sql = "INSERT INTO plc_oee_seat_text_input_activity (device, station_id, value, update_at) VALUES (%s, %s, %s, NOW())"
                         cursor.execute(log_sql, (device, info['station_id'], str(value)))
@@ -251,7 +256,7 @@ class SuzukiPLCGetOptimized:
                     if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master'] and info['comment']:
                         # SYNC LOGIC: Update plc_oee_seat_result based on Comment
                         comm = info['comment'].upper()
-                        if "MODEL" in comm or "DEST" in comm or "GRADE" in comm or "SEQ" in comm:
+                        if any(x in comm for x in ["MODEL", "DEST", "GRADE", "SEQ", "RESULT"]):
                             # Use info['station_id'] if available (for SEAT_RESULT_DETAIL), else parse from comment
                             stn_id = info['station_id']
                             if stn_id is None:
@@ -264,6 +269,7 @@ class SuzukiPLCGetOptimized:
                                 elif "DEST" in comm: col_to_update = "dest"
                                 elif "GRADE" in comm: col_to_update = "grade"
                                 elif "SEQ" in comm: col_to_update = "seq"
+                                elif "RESULT" in comm: col_to_update = "ok_ng"
                                 
                                 if col_to_update:
                                     # 1. Dashboard: INSERT to plc_oee_seat_result
@@ -277,31 +283,31 @@ class SuzukiPLCGetOptimized:
                                     
                                     self.log(f"SYNC LOG: {col_to_update} at QC{stn_id} (Val: {value})")
                     
-                    # elif table in ['plc_oee_delay_time_master', 'plc_oee_fault_master', 'plc_oee_total_fault_master']:
-                    #     # Start/End logic for Bits
-                    #     if table == 'plc_oee_delay_time_master':
-                    #         act_table, end_col = 'plc_oee_delay_activities', 'end_time'
-                    #     elif table == 'plc_oee_fault_master':
-                    #         act_table, end_col = 'plc_oee_fault_activities', 'endtime'
-                    #     else: # total_fault_master
-                    #         act_table, end_col = 'plc_oee_total_fault_activity', 'end_time'
-                    #     
-                    #     if str(value) == '1':
-                    #         # Insert Start
-                    #         if table == 'plc_oee_delay_time_master':
-                    #             log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
-                    #             cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
-                    #         elif table == 'plc_oee_total_fault_master':
-                    #             log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
-                    #             cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
-                    #         else: # fault_master
-                    #             log_sql = f"INSERT INTO {act_table} (device, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, NOW(), NOW())"
-                    #             cursor.execute(log_sql, (device, info['plc_id'], 1, info['comment']))
-                    #     
-                    #     elif str(value) == '0':
-                    #         # Update End Time for last open record
-                    #         log_sql = f"UPDATE {act_table} SET {end_col} = NOW(), update_at = NOW() WHERE device = %s AND {end_col} IS NULL ORDER BY start_time DESC LIMIT 1"
-                    #         cursor.execute(log_sql, (device,))
+                    elif table in ['plc_oee_delay_time_master', 'plc_oee_fault_master', 'plc_oee_total_fault_master']:
+                        # Start/End logic for Bits
+                        if table == 'plc_oee_delay_time_master':
+                            act_table, end_col = 'plc_oee_delay_activities', 'end_time'
+                        elif table == 'plc_oee_fault_master':
+                            act_table, end_col = 'plc_oee_fault_activities', 'endtime'
+                        else: # total_fault_master
+                            act_table, end_col = 'plc_oee_total_fault_activity', 'end_time'
+                        
+                        if str(value) == '1':
+                            # Insert Start
+                            if table == 'plc_oee_delay_time_master':
+                                log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
+                                cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
+                            elif table == 'plc_oee_total_fault_master':
+                                log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
+                                cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
+                            else: # fault_master
+                                log_sql = f"INSERT INTO {act_table} (device, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, NOW(), NOW())"
+                                cursor.execute(log_sql, (device, info['plc_id'], 1, info['comment']))
+                        
+                        elif str(value) == '0':
+                            # Update End Time for last open record
+                            log_sql = f"UPDATE {act_table} SET {end_col} = NOW(), update_at = NOW() WHERE device = %s AND {end_col} IS NULL ORDER BY start_time DESC LIMIT 1"
+                            cursor.execute(log_sql, (device,))
                     pass
 
                 if device in self.device_map and table in self.device_map[device]['tables']:
