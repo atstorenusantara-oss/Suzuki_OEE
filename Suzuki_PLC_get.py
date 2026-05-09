@@ -9,21 +9,21 @@ import re
 PLC_IP = "172.16.134.39"
 PLC_PORT = 9000
 
-
+    
 #--- CONFIGURATION MYSQL ---
-MYSQL_HOST = "localhost"
-MYSQL_PORT = 3306
-MYSQL_USER = "root"
-MYSQL_PASSWORD = ""
-MYSQL_DB = "plc_db"
+# MYSQL_HOST = "localhost"
+# MYSQL_PORT = 3306
+# MYSQL_USER = "root"
+# MYSQL_PASSWORD = ""
+# MYSQL_DB = "plc_db"
 
 # Remote Backup (Optional)
-# MYSQL_HOST = "172.16.121.30" # IP Server Suzuki
-# #MYSQL_HOST = "31.97.105.85" # IP Server Suzuki
-# MYSQL_PORT = 5307
-# MYSQL_USER = "plc_user"
-# MYSQL_PASSWORD = "5y1vf1qqay9764g"
-# MYSQL_DB = "plc_db"
+MYSQL_HOST = "172.16.121.30" # IP Server Suzuki
+#MYSQL_HOST = "31.97.105.85" # IP Server Suzuki
+MYSQL_PORT = 5307
+MYSQL_USER = "plc_user"
+MYSQL_PASSWORD = "5y1vf1qqay9764g"
+MYSQL_DB = "plc_db"
 
 
 # --- UPDATE INTERVAL ---
@@ -48,7 +48,6 @@ class SuzukiPLCGetOptimized:
             'plc_oee_ng_plc_master', 
             'plc_oee_fault_master', 
             'plc_oee_seat_result_detail',
-            'plc_oee_seat_text_input',
             'plc_oee_seat_ng_ok_master'
         ]
         self.device_map = {} 
@@ -84,6 +83,9 @@ class SuzukiPLCGetOptimized:
                 with self.db_conn.cursor() as cursor:
                     cursor.execute("SET time_zone = '+07:00'")
                 self.log("DATABASE: Terhubung (OK, TZ +07:00)")
+            else:
+                # Verifikasi koneksi masih aktif, jika tidak maka otomatis reconnect
+                self.db_conn.ping(reconnect=True)
             return True
         except Exception as e:
             self.log(f"DATABASE: Gagal. ({e})", "ERROR")
@@ -153,7 +155,7 @@ class SuzukiPLCGetOptimized:
             for table in self.tables:
                 # Ambil 5 kolom standar (device, value, station_id, plc_id, comment)
                 # Gunakan NULL sebagai placeholder jika kolom asli tidak ada di tabel tertentu
-                if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master']:
+                if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_ng_ok_master']:
                     cols = "device, value, station_id, NULL as plc_id, comment"
                 elif table == 'plc_oee_activities_master':
                     cols = "device, value, station_id, plc_id, NULL as comment"
@@ -196,6 +198,7 @@ class SuzukiPLCGetOptimized:
                         'tables': {table: str(current_val)},
                         'type': 'BIT' if any(p in device.upper() for p in ['B', 'M', 'X', 'Y']) else 'WORD',
                         'count': count,
+                        'is_ascii': is_ascii,
                         'station_id': station_id,
                         'plc_id': plc_id,
                         'comment': row[4] # Original case comment
@@ -229,7 +232,7 @@ class SuzukiPLCGetOptimized:
             # PHASE 1: Update semua Master Table dan Activity generik
             for table, device, value in update_data:
                 # Update Master Table
-                if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master']:
+                if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_ng_ok_master']:
                     ts_col = "update_at"
                 else:
                     ts_col = "updated_at"
@@ -247,9 +250,9 @@ class SuzukiPLCGetOptimized:
                         log_sql = "INSERT INTO plc_oee_activities (device, station_id, plc_id, value, update_at) VALUES (%s, %s, %s, %s, NOW())"
                         cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], str(value)))
                     
-                    elif table == 'plc_oee_seat_text_input':
-                        log_sql = "INSERT INTO plc_oee_seat_text_input_activity (device, station_id, value, update_at) VALUES (%s, %s, %s, NOW())"
-                        cursor.execute(log_sql, (device, info['station_id'], str(value)))
+                    # elif table == 'plc_oee_seat_text_input':
+                    #     log_sql = "INSERT INTO plc_oee_seat_text_input_activity (device, station_id, value, update_at) VALUES (%s, %s, %s, NOW())"
+                    #     cursor.execute(log_sql, (device, info['station_id'], str(value)))
                     
                     elif table == 'plc_oee_seat_ng_ok_master':
                         log_sql = "INSERT INTO plc_oee_seat_ng_ok_activity (device, station_id, value, update_at) VALUES (%s, %s, %s, NOW())"
@@ -369,45 +372,60 @@ class SuzukiPLCGetOptimized:
                                 ascii_cleaned = ascii_str.strip('\x00').strip()
                                 
                                 # 2. Determine raw integer value for numeric fallback
-                                raw_val = (val[0] + (val[1] << 16)) if meta['count'] >= 2 else val[0]
+                                # Gunakan val[0] untuk menghindari angka 32-bit aneh (268439825) saat terima garbage
+                                # raw_val = 32-bit untuk keperluan lain (tidak dipakai untuk activities)
+                                raw_val_32 = (val[0] + (val[1] << 16)) if meta['count'] >= 2 else val[0]
+                                raw_val = val[0]  # fallback aman: max 16-bit (0-65535)
                                 
                                 # 3. Context-aware decision: String or Number?
-                                is_text_input = 'plc_oee_seat_text_input' in meta['tables']
+                                is_text_input  = 'plc_oee_seat_text_input' in meta['tables']
+                                is_activities  = 'plc_oee_activities_master' in meta['tables']
                                 is_result_table = any(t in meta['tables'] for t in [
                                     'plc_oee_seat_ng_ok_master', 
-                                    'plc_oee_seat_result_detail', 
-                                    'plc_oee_activities_master'
+                                    'plc_oee_seat_result_detail'
                                 ])
                                 
-                                # Priority 1: If it's Text Input Table, ALWAYS use ASCII
+                                # Priority 1: Text Input → selalu ASCII
                                 if is_text_input:
                                     val_to_save = ascii_cleaned
                                 
-                                # Priority 2: If it's a known result table, check for OK (1) / NG (2) mapping
+                                # Priority 2: Activities → decode ASCII dulu (counter/SEQ seperti 9077)
+                                # fallback ke raw 16-bit (bukan 32-bit agar tidak 268439825)
+                                elif is_activities:
+                                    if ascii_cleaned.isprintable() and len(ascii_cleaned) > 0:
+                                        try:    val_to_save = str(int(ascii_cleaned))
+                                        except: val_to_save = ascii_cleaned
+                                    else:
+                                        # JIKA device adalah kolom teks (SEQ/MODEL), abaikan garbage seperti 4369 (0x1111)
+                                        if meta.get('is_ascii', False):
+                                            val_to_save = ""
+                                        else:
+                                            val_to_save = str(raw_val)
+                                
+                                # Priority 3: Result table (QC) → OK/NG mapping
                                 elif is_result_table:
-                                    if raw_val == 1: 
+                                    if raw_val_32 == 1: 
                                         val_to_save = "OK"
-                                    elif raw_val == 2: 
+                                    elif raw_val_32 == 2: 
                                         val_to_save = "NG"
                                     elif ascii_cleaned.isprintable() and len(ascii_cleaned) > 0 and not ascii_cleaned.isdigit():
-                                        # Use ASCII if it's printable text (like "OK" string or "FAIL")
                                         val_to_save = ascii_cleaned
                                     else:
-                                        # Use standard ASCII cleaning if it was numeric string (like "43") or just number
-                                        val_to_save = ascii_cleaned if (ascii_cleaned.isprintable() and len(ascii_cleaned) > 0) else str(raw_val)
+                                        val_to_save = ascii_cleaned if (ascii_cleaned.isprintable() and len(ascii_cleaned) > 0) else str(raw_val_32)
                                 else:
-                                    # For other tables (Activities, MODEL, etc.)
-                                    # Logic: If it's printable and not a simple single-digit number, treat as ASCII
+                                    # Tabel lain (MODEL, DEST, GRADE, dll)
                                     if ascii_cleaned.isprintable() and len(ascii_cleaned) > 1:
-                                        # Handle special case: Suzuki biasanya menginginkan string ID untuk 2-word MODEL/DEST
                                         if meta['count'] == 2:
                                             try: val_to_save = str(int(ascii_cleaned))
                                             except: val_to_save = ascii_cleaned
                                         else:
                                             val_to_save = ascii_cleaned
                                     else:
-                                        # Fallback to number
-                                        val_to_save = str(raw_val)
+                                        # Abaikan noise untuk kolom teks
+                                        if meta.get('is_ascii', False):
+                                            val_to_save = ""
+                                        else:
+                                            val_to_save = str(raw_val)
                                         
                             except Exception as e:
                                 val_to_save = "".join([f"{v:04X}" for v in val])

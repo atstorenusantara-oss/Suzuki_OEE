@@ -7,7 +7,7 @@ try:
     
     # Membaca data dari alamat B0 (sama dengan B000 dalam format Hex)
     # Membaca 5 unit word (masing-masing 16 bit)
-    data = plc.batchread_wordunits("W3C0", 2)
+    data = plc.batchread_wordunits("W180", 2)
     print(f"Data terbaca dari W: {data}")
 
 except Exception as e:

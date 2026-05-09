@@ -6,7 +6,7 @@ try:
     plc.connect("172.16.134.39", 9000)
     
     # Membaca data dari alamat W3C0 - W3C1 (2 word)
-    data = plc.batchread_wordunits("W3C0", 2)
+    data = plc.batchread_wordunits("W82", 2)
     
     print("------------------------------------------")
     print("Hasil pembacaan alamat W3C0 - W3C1:")
