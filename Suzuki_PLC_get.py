@@ -11,19 +11,19 @@ PLC_PORT = 9000
 
 
 #--- CONFIGURATION MYSQL ---
-# MYSQL_HOST = "localhost"
-# MYSQL_PORT = 3306
-# MYSQL_USER = "root"
-# MYSQL_PASSWORD = ""
-# MYSQL_DB = "plc_db"
+MYSQL_HOST = "localhost"
+MYSQL_PORT = 3306
+MYSQL_USER = "root"
+MYSQL_PASSWORD = ""
+MYSQL_DB = "plc_db"
 
 # Remote Backup (Optional)
-MYSQL_HOST = "172.16.121.30" # IP Server Suzuki
-#MYSQL_HOST = "31.97.105.85" # IP Server Suzuki
-MYSQL_PORT = 5307
-MYSQL_USER = "plc_user"
-MYSQL_PASSWORD = "5y1vf1qqay9764g"
-MYSQL_DB = "plc_db"
+# MYSQL_HOST = "172.16.121.30" # IP Server Suzuki
+# #MYSQL_HOST = "31.97.105.85" # IP Server Suzuki
+# MYSQL_PORT = 5307
+# MYSQL_USER = "plc_user"
+# MYSQL_PASSWORD = "5y1vf1qqay9764g"
+# MYSQL_DB = "plc_db"
 
 
 # --- UPDATE INTERVAL ---
@@ -224,9 +224,11 @@ class SuzukiPLCGetOptimized:
         if not self.connect_db() or not update_data: return
         try:
             cursor = self.db_conn.cursor()
+            seq_changes = [] # Menyimpan station_id yang mengalami perubahan SEQ di batch ini
+
+            # PHASE 1: Update semua Master Table dan Activity generik
             for table, device, value in update_data:
-                # 1. Update Master Table
-                # Determine Timestamp Column Name
+                # Update Master Table
                 if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master']:
                     ts_col = "update_at"
                 else:
@@ -234,7 +236,11 @@ class SuzukiPLCGetOptimized:
                 
                 sql = f"UPDATE {table} SET value = %s, {ts_col} = NOW() WHERE device = %s"
                 cursor.execute(sql, (str(value), device))
-                # 2. Log Activity & Result Updates
+                
+                # Sinkronisasi cache memory
+                if device in self.device_map and table in self.device_map[device]['tables']:
+                    self.device_map[device]['tables'][table] = str(value)
+
                 info = self.device_map.get(device)
                 if info:
                     if table == 'plc_oee_activities_master':
@@ -242,76 +248,86 @@ class SuzukiPLCGetOptimized:
                         cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], str(value)))
                     
                     elif table == 'plc_oee_seat_text_input':
-                        # NEW ACTIVITY LOG: Log separate history for Text Input (20 words)
                         log_sql = "INSERT INTO plc_oee_seat_text_input_activity (device, station_id, value, update_at) VALUES (%s, %s, %s, NOW())"
                         cursor.execute(log_sql, (device, info['station_id'], str(value)))
                     
                     elif table == 'plc_oee_seat_ng_ok_master':
-                        # NEW ACTIVITY LOG: Log separate history for NG/OK results
                         log_sql = "INSERT INTO plc_oee_seat_ng_ok_activity (device, station_id, value, update_at) VALUES (%s, %s, %s, NOW())"
                         cursor.execute(log_sql, (device, info['station_id'], str(value)))
-                    
-                    # Activity logs for other tables remain generic (using 'value' column)
 
-                    if table in ['plc_oee_seat_result_detail', 'plc_oee_seat_text_input', 'plc_oee_seat_ng_ok_master'] and info['comment']:
-                        # SYNC LOGIC: Update plc_oee_seat_result based on Comment
-                        comm = info['comment'].upper()
-                        if any(x in comm for x in ["MODEL", "DEST", "GRADE", "SEQ", "RESULT"]):
-                            # Use info['station_id'] if available (for SEAT_RESULT_DETAIL), else parse from comment
-                            stn_id = info['station_id']
-                            if stn_id is None:
-                                stn_match = re.search(r'QC(\d+)', comm)
-                                stn_id = stn_match.group(1) if stn_match else None
-                            
-                            if stn_id:
-                                col_to_update = None
-                                if "MODEL" in comm: col_to_update = "model"
-                                elif "DEST" in comm: col_to_update = "dest"
-                                elif "GRADE" in comm: col_to_update = "grade"
-                                elif "SEQ" in comm: col_to_update = "seq"
-                                elif "RESULT" in comm: col_to_update = "ok_ng"
-                                
-                                if col_to_update:
-                                    # 1. Dashboard: INSERT to plc_oee_seat_result
-                                    res_sql = f"INSERT INTO plc_oee_seat_result (station_id, device, {col_to_update}, update_at) VALUES (%s, %s, %s, NOW())"
-                                    cursor.execute(res_sql, (stn_id, device, str(value)))
-                                    
-                                    # 2. Activity History: Specific for Result Detail (seq/model/dest/grade)
-                                    if table == 'plc_oee_seat_result_detail':
-                                        act_sql = f"INSERT INTO plc_oee_seat_result_activity (device, station_id, {col_to_update}, update_at) VALUES (%s, %s, %s, NOW())"
-                                        cursor.execute(act_sql, (device, stn_id, str(value)))
-                                    
-                                    self.log(f"SYNC LOG: {col_to_update} at QC{stn_id} (Val: {value})")
+                    # Cek apakah yang berubah ini adalah SEQ (Abaikan noise)
+                    if table in ['plc_oee_seat_result_detail'] and info['comment']:
+                        val_clean = str(value).strip()
+                        if val_clean in ['0', '00', '74', '75'] or (val_clean.isdigit() and int(val_clean) == 0):
+                            pass # Noise, abaikan
+                        else:
+                            comm = info['comment'].upper()
+                            if "SEQ" in comm:
+                                stn_id = info['station_id']
+                                if stn_id is None:
+                                    stn_match = re.search(r'QC(\d+)', comm)
+                                    stn_id = stn_match.group(1) if stn_match else None
+                                if stn_id:
+                                    seq_changes.append({'stn_id': stn_id, 'device': device, 'seq_val': val_clean})
                     
+                    # Delay Time & Fault Logic (Tidak berubah)
                     elif table in ['plc_oee_delay_time_master', 'plc_oee_fault_master', 'plc_oee_total_fault_master']:
-                        # Start/End logic for Bits
                         if table == 'plc_oee_delay_time_master':
                             act_table, end_col = 'plc_oee_delay_activities', 'end_time'
                         elif table == 'plc_oee_fault_master':
                             act_table, end_col = 'plc_oee_fault_activities', 'endtime'
-                        else: # total_fault_master
+                        else:
                             act_table, end_col = 'plc_oee_total_fault_activity', 'end_time'
                         
                         if str(value) == '1':
-                            # Insert Start
-                            if table == 'plc_oee_delay_time_master':
+                            if table in ['plc_oee_delay_time_master', 'plc_oee_total_fault_master']:
                                 log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
                                 cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
-                            elif table == 'plc_oee_total_fault_master':
-                                log_sql = f"INSERT INTO {act_table} (device, station_id, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, %s, NOW(), NOW())"
-                                cursor.execute(log_sql, (device, info['station_id'], info['plc_id'], 1, info['comment']))
-                            else: # fault_master
+                            else:
                                 log_sql = f"INSERT INTO {act_table} (device, plc_id, value, comment, start_time, update_at) VALUES (%s, %s, %s, %s, NOW(), NOW())"
                                 cursor.execute(log_sql, (device, info['plc_id'], 1, info['comment']))
                         
                         elif str(value) == '0':
-                            # Update End Time for last open record
                             log_sql = f"UPDATE {act_table} SET {end_col} = NOW(), update_at = NOW() WHERE device = %s AND {end_col} IS NULL ORDER BY start_time DESC LIMIT 1"
                             cursor.execute(log_sql, (device,))
-                    pass
 
-                if device in self.device_map and table in self.device_map[device]['tables']:
-                    self.device_map[device]['tables'][table] = str(value)
+            # PHASE 2: Jika SEQ berubah, Tarik Data Utuh (1 Baris) dari Tabel Master lalu Insert
+            for seq_data in seq_changes:
+                stn_id = seq_data['stn_id']
+                seq_val = seq_data['seq_val']
+                device = seq_data['device']
+
+                # Ambil data terbaru (Model, Dest, Grade) dari Master Result Detail
+                cursor.execute("SELECT comment, value FROM plc_oee_seat_result_detail WHERE station_id = %s", (stn_id,))
+                details = cursor.fetchall()
+                model_val, dest_val, grade_val = None, None, None
+                for row in details:
+                    c = str(row[0]).upper()
+                    v = str(row[1]).strip()
+                    if v in ['0', '00', '74', '75'] or (v.isdigit() and int(v) == 0):
+                        continue
+                    if "MODEL" in c: model_val = v
+                    elif "DEST" in c: dest_val = v
+                    elif "GRADE" in c: grade_val = v
+
+                # Ambil data terbaru (OK/NG) dari Master NG/OK
+                cursor.execute("SELECT value FROM plc_oee_seat_ng_ok_master WHERE station_id = %s LIMIT 1", (stn_id,))
+                ok_row = cursor.fetchone()
+                ok_ng_val = None
+                if ok_row:
+                    v = str(ok_row[0]).strip()
+                    if v not in ['0', '00', '74', '75'] and not (v.isdigit() and int(v) == 0):
+                        ok_ng_val = v
+
+                # Eksekusi Insert Utuh 1 Baris ke Activity
+                act_sql = "INSERT INTO plc_oee_seat_result_activity (device, station_id, seq, model, dest, grade, ok_ng, update_at) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())"
+                cursor.execute(act_sql, (device, stn_id, seq_val, model_val, dest_val, grade_val, ok_ng_val))
+
+                # Eksekusi Insert Utuh 1 Baris ke Dashboard
+                res_sql = "INSERT INTO plc_oee_seat_result (device, station_id, seq, model, dest, grade, ok_ng, update_at) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())"
+                cursor.execute(res_sql, (device, stn_id, seq_val, model_val, dest_val, grade_val, ok_ng_val))
+
+                self.log(f"NEW SEAT RESULT: QC{stn_id} | SEQ:{seq_val} | MOD:{model_val} | DEST:{dest_val} | GRD:{grade_val} | OK_NG:{ok_ng_val}")
         except Exception as e:
             self.log(f"Gagal update batch DB: {e}", "ERROR")
 
