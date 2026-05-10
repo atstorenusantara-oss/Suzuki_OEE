@@ -10,7 +10,7 @@ PLC_IP = "172.16.134.39"
 PLC_PORT = 9000
 
     
-#--- CONFIGURATION MYSQL ---
+#--- CONFIGURATION MYSQL ----
 # MYSQL_HOST = "localhost"
 # MYSQL_PORT = 3306
 # MYSQL_USER = "root"
@@ -258,20 +258,28 @@ class SuzukiPLCGetOptimized:
                         log_sql = "INSERT INTO plc_oee_seat_ng_ok_activity (device, station_id, value, update_at) VALUES (%s, %s, %s, NOW())"
                         cursor.execute(log_sql, (device, info['station_id'], str(value)))
 
-                    # Cek apakah yang berubah ini adalah SEQ (Abaikan noise)
+                    # Cek apakah yang berubah ini adalah SEQ, MODEL, atau A#
                     if table in ['plc_oee_seat_result_detail'] and info['comment']:
                         val_clean = str(value).strip()
-                        if val_clean in ['0', '00', '74', '75'] or (val_clean.isdigit() and int(val_clean) == 0):
-                            pass # Noise, abaikan
-                        else:
-                            comm = info['comment'].upper()
-                            if "SEQ" in comm:
+                        comm = info['comment'].upper()
+                        
+                        is_noise = False
+                        if val_clean == '':
+                            is_noise = True
+                        elif not ("A#" in comm or " A " in comm):
+                            # Terapkan filter angka 0 hanya jika bukan A
+                            if val_clean in ['0', '00', '74', '75'] or (val_clean.isdigit() and int(val_clean) == 0):
+                                is_noise = True
+                                
+                        if not is_noise:
+                            if "SEQ" in comm or "MODEL" in comm or "A#" in comm or " A " in comm:
                                 stn_id = info['station_id']
                                 if stn_id is None:
                                     stn_match = re.search(r'QC(\d+)', comm)
                                     stn_id = stn_match.group(1) if stn_match else None
                                 if stn_id:
-                                    seq_changes.append({'stn_id': stn_id, 'device': device, 'seq_val': val_clean})
+                                    if not any(x['stn_id'] == stn_id for x in seq_changes):
+                                        seq_changes.append({'stn_id': stn_id, 'device': device})
                     
                     # Delay Time & Fault Logic (Tidak berubah)
                     elif table in ['plc_oee_delay_time_master', 'plc_oee_fault_master', 'plc_oee_total_fault_master']:
@@ -294,22 +302,25 @@ class SuzukiPLCGetOptimized:
                             log_sql = f"UPDATE {act_table} SET {end_col} = NOW(), update_at = NOW() WHERE device = %s AND {end_col} IS NULL ORDER BY start_time DESC LIMIT 1"
                             cursor.execute(log_sql, (device,))
 
-            # PHASE 2: Jika SEQ berubah, Tarik Data Utuh (1 Baris) dari Tabel Master lalu Insert
+            # PHASE 2: Jika SEQ atau MODEL berubah, Tarik Data Utuh (1 Baris) dari Tabel Master lalu Insert
             for seq_data in seq_changes:
                 stn_id = seq_data['stn_id']
-                seq_val = seq_data['seq_val']
                 device = seq_data['device']
 
-                # Ambil data terbaru (Model, Dest, Grade) dari Master Result Detail
+                # Ambil data terbaru (SEQ, Model, Dest, Grade) dari Master Result Detail
                 cursor.execute("SELECT comment, value FROM plc_oee_seat_result_detail WHERE station_id = %s", (stn_id,))
                 details = cursor.fetchall()
-                model_val, dest_val, grade_val = None, None, None
+                seq_val, model_val, dest_val, grade_val, a_num_val = None, None, None, None, None
                 for row in details:
                     c = str(row[0]).upper()
                     v = str(row[1]).strip()
-                    if v in ['0', '00', '74', '75'] or (v.isdigit() and int(v) == 0):
+                    if "A#" in c or " A " in c:
+                        a_num_val = v
                         continue
-                    if "MODEL" in c: model_val = v
+                    if v in ['0', '00', '74', '75', ''] or (v.isdigit() and int(v) == 0):
+                        continue
+                    if "SEQ" in c: seq_val = v
+                    elif "MODEL" in c: model_val = v
                     elif "DEST" in c: dest_val = v
                     elif "GRADE" in c: grade_val = v
 
@@ -319,18 +330,18 @@ class SuzukiPLCGetOptimized:
                 ok_ng_val = None
                 if ok_row:
                     v = str(ok_row[0]).strip()
-                    if v not in ['0', '00', '74', '75'] and not (v.isdigit() and int(v) == 0):
+                    if v not in ['0', '00', '74', '75', ''] and not (v.isdigit() and int(v) == 0):
                         ok_ng_val = v
 
                 # Eksekusi Insert Utuh 1 Baris ke Activity
-                act_sql = "INSERT INTO plc_oee_seat_result_activity (device, station_id, seq, model, dest, grade, ok_ng, update_at) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())"
-                cursor.execute(act_sql, (device, stn_id, seq_val, model_val, dest_val, grade_val, ok_ng_val))
+                act_sql = "INSERT INTO plc_oee_seat_result_activity (device, station_id, seq, model, dest, grade, ok_ng, A, update_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())"
+                cursor.execute(act_sql, (device, stn_id, seq_val, model_val, dest_val, grade_val, ok_ng_val, a_num_val))
 
                 # Eksekusi Insert Utuh 1 Baris ke Dashboard
                 res_sql = "INSERT INTO plc_oee_seat_result (device, station_id, seq, model, dest, grade, ok_ng, update_at) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())"
                 cursor.execute(res_sql, (device, stn_id, seq_val, model_val, dest_val, grade_val, ok_ng_val))
 
-                self.log(f"NEW SEAT RESULT: QC{stn_id} | SEQ:{seq_val} | MOD:{model_val} | DEST:{dest_val} | GRD:{grade_val} | OK_NG:{ok_ng_val}")
+                self.log(f"NEW SEAT RESULT: QC{stn_id} | SEQ:{seq_val} | MOD:{model_val} | DEST:{dest_val} | GRD:{grade_val} | A:{a_num_val} | OK_NG:{ok_ng_val}")
         except Exception as e:
             self.log(f"Gagal update batch DB: {e}", "ERROR")
 
